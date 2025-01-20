@@ -4,16 +4,52 @@ import random
 import re
 import textwrap
 import requests
+import yaml
 
 from pyaes import AESModeOfOperationCBC
-from requests import Session as req_Session
+from requests.adapters import HTTPAdapter, Retry
+from curl_cffi import requests as cffi_requests
+from curl_cffi.requests import Session
+
+class req_Session(Session):
+    def __init__(self, proxy_dict=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.proxy_dict = proxy_dict if proxy_dict is not None else {}
+
+    def get(self, url, **kwargs):
+        if 'proxies' not in kwargs:
+            kwargs['proxies'] = self.proxy_dict
+
+        return super().get(url, **kwargs)
+
+    def set_proxy_dict(self, proxy_dict):
+        self.proxy_dict = proxy_dict
+
+    def get_proxy_dict(self):
+        return self.proxy_dict
+
+
+# 加载配置文件 (config.yaml)
+def _load_config(file_path):
+    try:
+        with open(file_path, 'r') as f:
+            config = yaml.safe_load(f)
+        return config
+    except FileNotFoundError:
+        print(f"Config file {file_path} not found.")
+        return {}
+    except yaml.YAMLError as e:
+        print(f"Error decoding YAML: {e}")
+        return {}
 
 
 # 随机生成用户空间链接
 def randomly_gen_uspace_url() -> list:
     url_list = []
-    # 访问小黑屋用户空间不会获得积分、生成的随机数可能会重复，这里多生成两个链接用作冗余
-    for i in range(12):
+    # 访问小黑屋用户空间不会获得积分、生成的随机数可能会重复，这里额外生成2个链接用作冗余
+    MAX_POINTS_DAILY_USPACE_CNT=10
+    USPACE_CNT=MAX_POINTS_DAILY_USPACE_CNT+2
+    for i in range(USPACE_CNT):
         uid = random.randint(10000, 50000)
         url = "https://hostloc.com/space-uid-{}.html".format(str(uid))
         url_list.append(url)
@@ -29,14 +65,22 @@ def toNumbers(secret: str) -> list:
 
 
 # 不带Cookies访问论坛首页，检查是否开启了防CC机制，将开启状态、AES计算所需的参数全部放在一个字典中返回
-def check_anti_cc() -> dict:
+#
+def check_anti_cc(proxy_addr = None) -> dict:
+    if proxy_addr:
+        proxy_dict=dict(http=proxy_addr, https=proxy_addr)
+    else:
+        proxy_dict={}
     result_dict = {}
     headers = {
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36"
     }
     home_page = "https://hostloc.com/forum.php"
-    res = requests.get(home_page, headers=headers)
-    aes_keys = re.findall('toNumbers\("(.*?)"\)', res.text)
+
+    #res = requests.get(home_page, headers=headers, proxies=proxy_dict, timeout=3)
+    res = cffi_requests.get(url=home_page, headers=headers, proxies=proxy_dict, timeout=3, impersonate="chrome101")
+    aes_keys = re.findall(r'toNumbers\("(.*?)"\)', res.text)
+    #aes_keys = re.findall('toNumbers\("(.*?)"\)', res.text)
     cookie_name = re.findall('cookie="(.*?)="', res.text)
 
     if len(aes_keys) != 0:  # 开启了防CC机制
@@ -56,9 +100,9 @@ def check_anti_cc() -> dict:
 
 
 # 在开启了防CC机制时使用获取到的数据进行AES解密计算生成一条Cookie（未开启防CC机制时返回空Cookies）
-def gen_anti_cc_cookies() -> dict:
+def gen_anti_cc_cookies(proxy_addr = None) -> dict:
     cookies = {}
-    anti_cc_status = check_anti_cc()
+    anti_cc_status = check_anti_cc(proxy_addr)
 
     if anti_cc_status:  # 不为空，代表开启了防CC机制
         if anti_cc_status["ok"] == 0:
@@ -79,8 +123,8 @@ def gen_anti_cc_cookies() -> dict:
     return cookies
 
 
-# 登录帐户
-def login(username: str, password: str) -> req_Session:
+# 登录帐户 (返回req_Session对象)
+def login(username: str, password: str, proxy_addr = None) -> req_Session:
     headers = {
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
         "origin": "https://hostloc.com",
@@ -95,28 +139,44 @@ def login(username: str, password: str) -> req_Session:
         "handlekey": "ls",
     }
 
-    s = req_Session()
+    timeout=3
+    impersonate="chrome101"
+    retries = Retry(total=3,
+                backoff_factor=0.1,
+                status_forcelist=[ 500, 502, 503, 504 ])
+    if proxy_addr:
+        proxy_dict=dict(http=proxy_addr, https=proxy_addr)
+    else:
+        proxy_dict={}
+    s = req_Session(proxy_dict=proxy_dict)
+    # s.mount('http://', HTTPAdapter(max_retries=retries))
+    # s.mount('https://', HTTPAdapter(max_retries=retries))
     s.headers.update(headers)
     s.cookies.update(gen_anti_cc_cookies())
-    res = s.post(url=login_url, data=login_data)
+
+
+    res = s.post(url=login_url, data=login_data,
+                 proxies=proxy_dict)
     res.raise_for_status()
     return s
 
 
 # 通过抓取用户设置页面的标题检查是否登录成功
-def check_login_status(s: req_Session, number_c: int) -> bool:
+def check_login_status(s: req_Session, count: int) -> bool:
     test_url = "https://hostloc.com/home.php?mod=spacecp"
+
     res = s.get(test_url)
     res.raise_for_status()
     res.encoding = "utf-8"
-    test_title = re.findall("<title>(.*?)<\/title>", res.text)
+    test_title = re.findall(r'<title>(.*?)<\/title>', res.text)
+    #test_title = re.findall("<title>(.*?)<\/title>", res.text)
 
     if len(test_title) != 0:  # 确保正则匹配到了内容，防止出现数组索引越界的情况
         if test_title[0] != "个人资料 -  全球主机交流论坛 -  Powered by Discuz!":
-            print("第", number_c, "个帐户登录失败！")
+            print("第", count, "个帐户登录失败！")
             return False
         else:
-            print("第", number_c, "个帐户登录成功！")
+            print("第", count, "个帐户登录成功！")
             return True
     else:
         print("无法在用户设置页面找到标题，该页面存在错误或被防 CC 机制拦截！")
@@ -124,12 +184,19 @@ def check_login_status(s: req_Session, number_c: int) -> bool:
 
 
 # 抓取并打印输出帐户当前积分
-def print_current_points(s: req_Session):
+def print_current_points(s: req_Session, proxy_addr = None):
     test_url = "https://hostloc.com/forum.php"
-    res = s.get(test_url)
+
+    if proxy_addr:
+        proxy_dict=dict(http=proxy_addr, https=proxy_addr)
+    else:
+        proxy_dict={}
+
+    res = s.get(test_url, proxies=proxy_dict)
     res.raise_for_status()
     res.encoding = "utf-8"
-    points = re.findall("积分: (\d+)", res.text)
+    points = re.findall(r'积分: (\d+)', res.text)
+    #points = re.findall("积分: (\d+)", res.text)
 
     if len(points) != 0:  # 确保正则匹配到了内容，防止出现数组索引越界的情况
         print("帐户当前积分：" + points[0])
@@ -139,68 +206,84 @@ def print_current_points(s: req_Session):
 
 
 # 依次访问随机生成的用户空间链接获取积分
-def get_points(s: req_Session, number_c: int):
-    if check_login_status(s, number_c):
-        print_current_points(s)  # 打印帐户当前积分
+def get_points(s: req_Session, proxy_addr = None):
+    print("Debug: get_points")
+    if proxy_addr:
+        proxy_dict=dict(http=proxy_addr, https=proxy_addr)
+    else:
+        proxy_dict={}
+
+    if check_login_status(s, proxy_addr):
+        print_current_points(s, proxy_addr)  # 打印帐户当前积分
         url_list = randomly_gen_uspace_url()
         # 依次访问用户空间链接获取积分，出现错误时不中断程序继续尝试访问下一个链接
+
+        COOLDOWN_IN_SECS=5
         for i in range(len(url_list)):
             url = url_list[i]
             try:
-                res = s.get(url)
+                res = s.get(url, proxies=proxy_dict)
                 res.raise_for_status()
                 print("第", i + 1, "个用户空间链接访问成功")
-                time.sleep(5)  # 每访问一个链接后休眠5秒，以避免触发论坛的防CC机制
+                time.sleep(COOLDOWN_IN_SECS)  # 每访问一个链接后休眠5秒，以避免触发论坛的防CC机制
             except Exception as e:
                 print("链接访问异常：" + str(e))
             continue
-        print_current_points(s)  # 再次打印帐户当前积分
+        print_current_points(s, proxy_addr)  # 再次打印帐户当前积分
     else:
         print("请检查你的帐户是否正确！")
 
 
 # 打印输出当前ip地址
-def print_my_ip():
+def print_my_ip(proxy_addr = None):
     api_url = "https://api.ipify.org/"
+    if proxy_addr:
+        proxy_dict=dict(http=proxy_addr, https=proxy_addr)
+    else:
+        proxy_dict={}
     try:
-        res = requests.get(url=api_url)
+        res = requests.get(url=api_url, proxies=proxy_dict)
         res.raise_for_status()
         res.encoding = "utf-8"
-        print("当前使用 ip 地址：" + res.text)
+        print("当前使用的 ip 地址：" + res.text)
     except Exception as e:
-        print("获取当前 ip 地址失败：" + str(e))
+        print("获取当前的 ip 地址失败。原因：" + str(e))
 
 
-if __name__ == "__main__":
-    username = "账户"
-    password = "密码"
-    # username = os.environ["HOSTLOC_USERNAME"]
-    # password = os.environ["HOSTLOC_PASSWORD"]
-    #账户和密码
-    
+def startup():
+# Load the YAML configuration
+    config = _load_config('config.yaml')
+    # Convert user credentials from list of lists to list of tuples
+    usercredentials = config.get('usercredentials', [])
+    usercredentials_tuples = [tuple(cred) for cred in usercredentials] if usercredentials else []
 
-    # 分割用户名和密码为列表
-    user_list = username.split(",")
-    passwd_list = password.split(",")
+    proxy_addr = config.get('proxyaddress', None)
+    if proxy_addr:
+        print(f"使用代理，地址：{proxy_addr}")
 
-    if not username or not password:
-        print("未检测到用户名或密码，请检查环境变量是否设置正确！")
-    elif len(user_list) != len(passwd_list):
-        print("用户名与密码个数不匹配，请检查环境变量设置是否错漏！")
+    if len(usercredentials_tuples) <= 0:
+        print("未检测到用户名及密码，请检查环境变量是否设置正确！")
     else:
-        print_my_ip()
-        print("共检测到", len(user_list), "个帐户，开始获取积分")
+        print_my_ip(proxy_addr)
+        print("共检测到", len(usercredentials_tuples), "个帐户，开始获取积分")
         print("*" * 30)
 
         # 依次登录帐户获取积分，出现错误时不中断程序继续尝试下一个帐户
-        for i in range(len(user_list)):
+        for index, (username, password) in enumerate(usercredentials_tuples):
+            s = None
             try:
-                s = login(user_list[i], passwd_list[i])
-                get_points(s, i + 1)
+                s = login(username, password, proxy_addr)
+                get_points(s+1, index)
                 print("*" * 30)
             except Exception as e:
-                print("程序执行异常：" + str(e))
+                print("程序执行异常。原因：" + str(e))
                 print("*" * 30)
+            finally:
+                if s:
+                    s.close()
             continue
 
         print("程序执行完毕，获取积分过程结束")
+
+if __name__ == "__main__":
+    startup()

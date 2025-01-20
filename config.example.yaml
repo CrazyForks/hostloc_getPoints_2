@@ -1,0 +1,8 @@
+# 1. 复制此配置文件，并重新命名为：config.yaml
+# 2. 修改config.yaml，填写自己的账号密码，以及代理地址
+usercredentials:
+  # - [hostloc_username1, password1]
+  # - [hostloc_username2, password2]
+
+# 删除下行开头的'#'，以启用socks5h的代理地址
+# proxyaddress: "socks5h://127.0.0.1:8080"

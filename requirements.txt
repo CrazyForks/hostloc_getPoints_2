@@ -1,0 +1,12 @@
+certifi==2024.12.14
+cffi==1.17.1
+charset-normalizer==3.4.1
+curl_cffi==0.7.4
+idna==3.10
+pyaes==1.6.1
+pycparser==2.22
+PySocks==1.7.1
+PyYAML==6.0.2
+requests==2.32.3
+typing_extensions==4.12.2
+urllib3==2.3.0
