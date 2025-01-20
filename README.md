@@ -34,7 +34,11 @@ pip install -r requirements.txt
 
 修改`config.yaml`文件，注意需要保持`yaml`配置文件中相关行的**缩进一致**！
 
-以下为2个账号，并设置代理为socks5本地代理`127.0.0.1:8080`的参考配置。
+以下为2个账号，并设置代理为socks5h本地代理`127.0.0.1:8080`的参考配置。
+
+注意，如果配置使用：`socks5://127.0.0.1:8080`，则会启用本地的8080端口上的socks5代理，但是DNS解析域名仍可能被污染。
+如果配置使用：`socks5h://127.0.0.1:8080`，则会启用本地的8080端口上的socks5代理，并负责域名的DNS解析。
+
 ```
 usercredentials:
   - [hostloc_username1, password1]
@@ -42,7 +46,8 @@ usercredentials:
 
 proxyaddress: "socks5h://127.0.0.1:8080"
 ```
-`usercredentials`下，可以按照相同格式添加多个账户信息（注意缩进），`proxyaddress`为可选项，不需要代理访问的话，可以删除此行，或者在此行开头添加`#`注释掉此行使其无效。
+`usercredentials`下，可以按照相同格式添加多个账户信息（注意缩进）。
+`proxyaddress`为可选项，不需要代理访问的话，可以删除此行，或者在此行开头添加`#`注释掉此行使其无效。
 
 ### 4. 运行
 因为安装的所有依赖模块都在虚拟环境中，因此此处注意需要在**虚拟环境下运行**
@@ -51,11 +56,25 @@ proxyaddress: "socks5h://127.0.0.1:8080"
 ```
 python -m hostlocautogetpoints
 ```
-#### 4.1 退出虚拟环境（可选）
+#### （可选）退出虚拟环境
 如果需要退出**虚拟环境**，在 `hostloc_getPoints`目录下，执行过`.\.venv\Scripts\Activate.ps1`之后，请使用下述命令。
 ```
 deactivate
 ```
 
-## 已知问题
-需要验证当前代码是否能绕过可能触发的CC机制
+#### 4.1.（可选）运行方式（二）
+单python文件+`config.yaml`配置文件运行，需要安装所需依赖模块，`config.yml`需要放置在当前目录下
+```
+# 以 Windows11 的 powershell，使用venv虚拟环境为例
+
+# 进入项目的主文件夹下
+cd hostloc_getPoints
+
+# 如果不使用虚拟环境，需要安装requests、curl_cffi等模块。所需模块详见requirements.txt
+# 确保当前目录下已放置`config.yml`
+python .\hostlocautogetpoints\hostloc_auto_get_points.py
+```
+
+
+## 任务列表
+验证当前代码是否能绕过可能触发的CC机制
