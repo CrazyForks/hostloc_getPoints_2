@@ -6,3 +6,9 @@ usercredentials:
 
 # 删除前置的'#'，以启用socks5h的代理地址
 #proxyaddress: "socks5h://127.0.0.1:7890"
+
+# 删除前置的'#'，以设置连接超时的秒数（默认：3, <=20）
+# timeout: 3
+
+# 是否检查本机IP（默认：True）（可选：False）
+# printip: True

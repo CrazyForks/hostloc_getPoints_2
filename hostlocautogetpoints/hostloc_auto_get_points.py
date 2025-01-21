@@ -3,11 +3,9 @@ import time
 import random
 import re
 import textwrap
-import requests
 import yaml
 
 from pyaes import AESModeOfOperationCBC
-from requests.adapters import HTTPAdapter, Retry
 from curl_cffi import requests as cffi_requests
 from curl_cffi.requests import Session
 
@@ -56,7 +54,7 @@ def check_anti_cc(s: Session) -> dict:
     }
     home_page = "https://hostloc.com/forum.php"
 
-    res = s.get(url=home_page, headers=headers, timeout=3, impersonate="chrome101")
+    res = s.get(url=home_page, headers=headers)
     aes_keys = re.findall(r'toNumbers\("(.*?)"\)', res.text)
     cookie_name = re.findall('cookie="(.*?)="', res.text)
 
@@ -100,8 +98,8 @@ def gen_anti_cc_cookies(s: Session) -> dict:
     return cookies
 
 
-# 登录帐户 (返回Session对象)
-def login(username: str, password: str, proxy_addr = None) -> Session:
+# 登录帐户 (返回Session对象，并设置相应参数)
+def login_and_return_session(username: str, password: str, proxy_addr=None, timeout=3) -> Session:
     headers = {
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
         "origin": "https://hostloc.com",
@@ -116,14 +114,13 @@ def login(username: str, password: str, proxy_addr = None) -> Session:
         "handlekey": "ls",
     }
 
-    timeout=3
     impersonate="chrome101"
 
     if proxy_addr:
         proxy_dict=dict(http=proxy_addr, https=proxy_addr)
     else:
         proxy_dict={}
-    s = Session(proxies=proxy_dict)
+    s = Session(proxies=proxy_dict, timeout=timeout, impersonate=impersonate)
 
     s.headers.update(headers)
     s.cookies.update(gen_anti_cc_cookies(s))
@@ -195,14 +192,14 @@ def get_points(s: Session, count: int):
 
 
 # 打印输出当前ip地址
-def print_my_ip(proxy_addr = None):
+def print_my_ip(proxy_addr=None, timeout=3):
     api_url = "https://api.ipify.org/"
     if proxy_addr:
         proxy_dict=dict(http=proxy_addr, https=proxy_addr)
     else:
         proxy_dict={}
     try:
-        res = requests.get(url=api_url, proxies=proxy_dict)
+        res = cffi_requests.get(url=api_url, proxies=proxy_dict, timeout=timeout)
         res.raise_for_status()
         res.encoding = "utf-8"
         print("当前使用的 ip 地址："+res.text)
@@ -211,20 +208,35 @@ def print_my_ip(proxy_addr = None):
 
 
 def startup():
-# Load the YAML configuration
+# 加载YAML配置文件
     config = _load_config('config.yaml')
-    # Convert user credentials from list of lists to list of tuples
+
+    # 加载登录信息
     usercredentials = config.get('usercredentials', [])
     usercredentials_tuples = [tuple(cred) for cred in usercredentials] if usercredentials else []
 
+    # curl_cffi 连接超时秒数（<=21）
+    timeout = config.get('timeout', 3)
+
+    # 是否打印当前ip地址，默认True，赋值不符合要求时fallback为False
+    ip_check = config.get('printip', True)
+    if (type(ip_check) == str):
+        if ip_check.lower() in ["true", "t"]:
+            ip_check = True
+        else:
+            ip_check = False
+    elif not isinstance(ip_check, bool):
+        ip_check = False
+
     proxy_addr = config.get('proxyaddress', None)
     if proxy_addr:
-        print(f"使用代理地址：{proxy_addr}")
+        print(f"使用代理：{proxy_addr}")
 
     if len(usercredentials_tuples) <= 0:
         print("未检测到用户名及密码，请检查环境变量是否设置正确！")
     else:
-        print_my_ip(proxy_addr)
+        if ip_check:
+            print_my_ip(proxy_addr, timeout)
         print("共检测到", len(usercredentials_tuples), "个帐户，开始获取积分")
         print("*" * 30)
 
@@ -232,7 +244,7 @@ def startup():
         for index, (username, password) in enumerate(usercredentials_tuples):
             s = None
             try:
-                s = login(username, password, proxy_addr)
+                s = login_and_return_session(username, password, proxy_addr, timeout)
                 get_points(s, index+1)
                 print("*" * 30)
             except Exception as e:
